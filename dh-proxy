@@ -1,0 +1,137 @@
+#!/usr/bin/env python3
+import socket
+import sys
+import struct
+import select
+
+from Crypto.Cipher import AES
+from Crypto.Protocol.KDF import PBKDF2
+from Crypto.Util.Padding import pad, unpad
+from Crypto.Random import get_random_bytes
+from Crypto.Util.number import bytes_to_long, long_to_bytes
+from Crypto.Hash import SHA256
+
+
+def dh_key_exchange(sock, p, g):
+    # Generate private key on both client and server
+    
+    private_key = get_random_bytes(32)
+    private_key = bytes_to_long(private_key)
+    
+    # Calculate public key
+    public_key = pow(g, private_key, p)
+    public_key = str(public_key).encode('utf-8')
+    public_key = public_key.rjust(384, b'0')
+    
+    # Send public key to other party
+    sock.sendall(public_key)
+    
+    # Receive other party's public key
+    other_public_key = sock.recv(384)
+    other_public_key = int(other_public_key)
+    
+    # Calculate shared secret
+    shared_secret = pow(other_public_key, private_key, p)
+    shared_secret = long_to_bytes(shared_secret)
+    # shared_secret = shared_secret.hex()
+    
+    # Hash shared secret to generate session key
+    session_key = SHA256.new(shared_secret)
+    session_key = session_key.digest()[:32]
+    
+    return session_key
+
+def encryption(key, data, nonce):
+    cipher = AES.new(key, AES.MODE_GCM, nonce)
+    ciphertext, tag = cipher.encrypt_and_digest(pad(data, 16))
+    return (nonce + tag + ciphertext)
+
+def decryption(key, data, conn):
+    try:
+        nonce, tag, ciphertext = data[:16], data[16:32], data[32:]
+        cipher = AES.new(key, AES.MODE_GCM, nonce)
+        plaintext = unpad(cipher.decrypt_and_verify(ciphertext, tag), 16)
+        return plaintext
+    except ValueError as e:
+        sys.stderr.write('Error: integrity check failed.')
+        conn.close()
+
+def read_from_client(client_connection):
+    # Create a TCP/IP socket
+    g=2
+    p=0x00cc81ea8157352a9e9a318aac4e33ffba80fc8da3373fb44895109e4c3ff6cedcc55c02228fccbd551a504feb4346d2aef47053311ceaba95f6c540b967b9409e9f0502e598cfc71327c5a455e2e807bede1e0b7d23fbea054b951ca964eaecae7ba842ba1fc6818c453bf19eb9c5c86e723e69a210d4b72561cab97b3fb3060b
+    key = dh_key_exchange(client_connection, p, g)
+
+
+    res = b''
+    while True:
+        data_len = client_connection.recv(2)
+        if not data_len:
+            break
+        data_len = struct.unpack('!H', data_len)[0]
+        data = client_connection.recv(data_len)
+        if not data:
+            break
+        plaintext = decryption(key, data, client_connection)
+        if plaintext is not None:
+            res += plaintext
+        else:
+            break
+    # Clean up the connection
+    client_connection.close()
+    return res
+
+def send_data_to_server(data, server_socket):
+
+    g=2
+    p=0x00cc81ea8157352a9e9a318aac4e33ffba80fc8da3373fb44895109e4c3ff6cedcc55c02228fccbd551a504feb4346d2aef47053311ceaba95f6c540b967b9409e9f0502e598cfc71327c5a455e2e807bede1e0b7d23fbea054b951ca964eaecae7ba842ba1fc6818c453bf19eb9c5c86e723e69a210d4b72561cab97b3fb3060b
+
+    key = dh_key_exchange(server_socket, p, g)
+  
+
+    nonce = get_random_bytes(16)
+
+    chunk_size = 1024
+    for i in range(0, len(data), chunk_size):
+        chunk = data[i:i + chunk_size]
+        ciphertext = encryption(key, chunk, nonce)
+        data_len = struct.pack('!H', len(ciphertext))
+        server_socket.sendall(data_len + ciphertext)
+
+    # Clean up the connection
+    server_socket.close()
+
+if __name__ == '__main__':
+    if len(sys.argv) == 5:
+        proxy_port = int(sys.argv[2])
+        server_ip = sys.argv[3]
+        server_port = int(sys.argv[4])
+        proxy_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+        # Bind the socket to a specific address and port
+        proxy_address = (server_ip, proxy_port)
+        proxy_socket.bind((server_ip, proxy_port))
+        proxy_socket.listen()
+
+        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server_addr = (server_ip, server_port)
+        server_socket.connect(server_addr)
+
+        stopLoop = False
+
+        while not stopLoop:
+            rlist, wlist, xlist = select.select([proxy_socket, server_socket], [], [])
+
+            for sock in rlist:
+                if sock == proxy_socket:
+                    client_socket, client_address = proxy_socket.accept()
+                    rlist.append(client_socket)
+                elif sock != server_socket:
+                    data = read_from_client(sock)
+                    send_data_to_server(data, server_socket)
+                    stopLoop = True
+                    break
+
+    else:
+        print("Check command format")
+

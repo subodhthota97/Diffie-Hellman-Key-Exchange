@@ -1,0 +1,83 @@
+#!/usr/bin/env python3
+import socket
+import sys
+import struct
+
+def run_server(port):
+    # Create a TCP/IP socket
+    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+    # Bind the socket to a specific address and port
+    server_address = ('', port)
+    server_socket.bind(server_address)
+
+    # Listen for incoming connections
+    server_socket.listen(1)
+    # print("Server is listening on port {}".format(port))
+
+    # Wait for a connection
+    client_conn, client_address = server_socket.accept()
+    # print("Accepted connection from {}".format(client_address))
+
+    # Receive the length of the data
+
+
+    # Receive the data
+    data = b''
+    # chunk = connection.recv(1024)
+    # while chunk:
+    #     data += chunk
+    #     chunk = connection.recv(1024)
+    while True:
+        data_len = client_conn.recv(2)
+        if not data_len:
+            break
+        data_len = struct.unpack('!H', data_len)[0]
+        data = client_conn.recv(data_len)
+        if not data:
+            break
+        sys.stdout.buffer.write(data)
+        
+    # # Write the data to stdout
+    # sys.stdout.buffer.write(data)
+
+    # Clean up the connection
+    client_conn.close()
+
+def run_client(server_ip, port):
+    # Create a TCP/IP socket
+    client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+    # Connect the socket to the server's address and port
+    server_address = (server_ip, port)
+    client_socket.connect(server_address)
+    print("Connected to {}:{}".format(server_ip, port))
+
+    # Read the data from stdin
+    data = sys.stdin.buffer.read()
+
+    # Send the length of the data
+    # data_len = struct.pack('!H', len(data))
+    # client_socket.sendall(data_len)
+
+    chunk_size = 1024
+    for i in range(0, len(data), chunk_size):
+        data_len = struct.pack('!H', len(data[i:i + chunk_size]))
+        client_socket.sendall(data_len+data[i:i + chunk_size])
+
+    # Clean up the connection
+    client_socket.close()
+
+if __name__ == '__main__':
+    # print(sys.argv)
+    if len(sys.argv) == 3:
+        if sys.argv[1] == '-l':
+            port = int(sys.argv[2])
+            run_server(port)
+        else:
+            server_ip = sys.argv[1]
+            port = int(sys.argv[2])
+            run_client(server_ip, port)
+    else:
+        print("Check command format")
+
